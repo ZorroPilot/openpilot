@@ -43,7 +43,7 @@ To use openpilot in a car, you need four things
 * This software. The setup procedure of the comma three, allows the user to enter a url for custom software.
 The url, openpilot.comma.ai will install the release version of openpilot. To install openpilot master, you can use installer.comma.ai/commaai/master, and replacing commaai with another github username can install a fork.
 * One of [the 150+ supported cars](docs/CARS.md). We support Honda, Toyota, Hyundai, Nissan, Kia, Chrysler, Lexus, Acura, Audi, VW, and more. If your car is not supported, but has adaptive cruise control and lane keeping assist, it's likely able to run openpilot.
-* [A car harness to connect to your car](https://comma.ai/shop/products/car-harness).
+* A [car harness](https://comma.ai/shop/products/car-harness) to connect to your car.
 
 We have detailed instructions for [how to mount the device in a car](https://comma.ai/setup).
 
