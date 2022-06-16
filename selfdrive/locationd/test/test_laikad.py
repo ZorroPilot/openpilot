@@ -34,12 +34,12 @@ def verify_messages(lr, laikad, return_one_success=False):
   return good_msgs
 
 
-def get_first_measurement_msg(logs):
+def get_first_gps_time(logs):
   for m in logs:
     if m.ubloxGnss.which == 'measurementReport':
       new_meas = read_raw_ublox(m.ubloxGnss.measurementReport)
-      if len(new_meas) != 0:
-        return new_meas[0]
+      if len(new_meas) > 0:
+        return new_meas[0].recv_time
 
 
 def get_measurement_mock(gpstime, sat_ephemeris):
@@ -56,7 +56,8 @@ class TestLaikad(unittest.TestCase):
   def setUpClass(cls):
     logs = get_log(range(1))
     cls.logs = logs
-    cls.first_gps_time = get_first_measurement_msg(logs).recv_time
+    first_gps_time = get_first_gps_time(logs)
+    cls.first_gps_time = first_gps_time
 
   def setUp(self):
     Params().delete(EPHEMERIS_CACHE)
