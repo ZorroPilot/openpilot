@@ -191,8 +191,7 @@ def create_measurement_msg(meas: GNSSMeasurement):
   c.satVel = meas.sat_vel.tolist()
   ephem = meas.sat_ephemeris
   assert ephem is not None
-  eph_type = ephem.eph_type
-  if eph_type == EphemerisType.NAV:
+  if ephem.eph_type == EphemerisType.NAV:
     source_type = EphemerisSourceType.nav
     week, time_of_week = -1, -1
   else:
