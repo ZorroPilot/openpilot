@@ -7,11 +7,11 @@ from unittest import mock
 from unittest.mock import Mock, patch
 
 from common.params import Params
-from laika.ephemeris import EphemerisType, GLONASSEphemeris, GPSEphemeris, PolyEphemeris
+from laika.ephemeris import EphemerisType, GPSEphemeris
 from laika.gps_time import GPSTime
 from laika.helpers import ConstellationId, TimeRangeHolder
 from laika.raw_gnss import GNSSMeasurement, read_raw_ublox
-from selfdrive.locationd.laikad import EPHEMERIS_CACHE, Laikad, create_measurement_msg
+from selfdrive.locationd.laikad import EPHEMERIS_CACHE, EphemerisSourceType, Laikad, create_measurement_msg
 from selfdrive.test.openpilotci import get_url
 from tools.lib.logreader import LogReader
 
@@ -34,33 +34,61 @@ def verify_messages(lr, laikad, return_one_success=False):
   return good_msgs
 
 
+def get_first_measurement_msg(logs):
+  for m in logs:
+    if m.ubloxGnss.which == 'measurementReport':
+      new_meas = read_raw_ublox(m.ubloxGnss.measurementReport)
+      if len(new_meas) != 0:
+        return new_meas[0]
+
+
+def get_measurement_mock(gpstime, sat_ephemeris):
+  meas = GNSSMeasurement(ConstellationId.GPS, 1, gpstime.week, gpstime.tow, {'C1C': 0., 'D1C': 0.}, {'C1C': 0., 'D1C': 0.})
+  # Fake measurement being processed
+  meas.observables_final = meas.observables
+  meas.sat_ephemeris = sat_ephemeris
+  return meas
+
+
 class TestLaikad(unittest.TestCase):
 
   @classmethod
   def setUpClass(cls):
-    cls.logs = get_log(range(1))
+    logs = get_log(range(1))
+    cls.logs = logs
+    cls.first_gps_time = get_first_measurement_msg(logs).recv_time
 
   def setUp(self):
     Params().delete(EPHEMERIS_CACHE)
 
-  def test_create_msg_without_errors(self):
-    gpstime = GPSTime.from_datetime(datetime.now())
-    meas = GNSSMeasurement(ConstellationId.GPS, 1, gpstime.week, gpstime.tow, {'C1C': 0., 'D1C': 0.}, {'C1C': 0., 'D1C': 0.})
-    # Fake measurement being processed
-    meas.observables_final = meas.observables
+  def test_ephemeris_source_in_msg(self):
     data_mock = defaultdict(str)
     data_mock['sv_id'] = 1
-    for ephem in [GLONASSEphemeris(data_mock, gpstime), GPSEphemeris(data_mock, gpstime)]:
-      meas.sat_ephemeris = ephem
-      msg = create_measurement_msg(meas)
-      self.assertEqual(msg.ephemerisType, EphemerisType.NAV)
 
-    for ephem_type in EphemerisType.all_orbits():
-      file_source = 'file_source.something'
-      meas.sat_ephemeris = PolyEphemeris('G01', data_mock, gpstime, ephem_type, 'file_source.something')
-      msg = create_measurement_msg(meas)
-      self.assertEqual(msg.ephemerisType, ephem_type)
-      self.assertEqual(msg.fileSource, file_source)
+    gpstime = GPSTime.from_datetime(datetime(2022, month=3, day=1))
+    laikad = Laikad()
+    laikad.fetch_orbits(gpstime, block=True)
+    meas = get_measurement_mock(gpstime, laikad.astro_dog.orbits['R01'][0])
+    msg = create_measurement_msg(meas)
+    self.assertEqual(msg.ephemerisSource.type.raw, EphemerisSourceType.glonassIacUltraRapid)
+    # Verify gps satellite returns same source
+    meas = get_measurement_mock(gpstime, laikad.astro_dog.orbits['R01'][0])
+    msg = create_measurement_msg(meas)
+    self.assertEqual(msg.ephemerisSource.type.raw, EphemerisSourceType.glonassIacUltraRapid)
+
+    # Test nasa source by using older date
+    gpstime = GPSTime.from_datetime(datetime(2021, month=3, day=1))
+    laikad = Laikad()
+    laikad.fetch_orbits(gpstime, block=True)
+    meas = get_measurement_mock(gpstime, laikad.astro_dog.orbits['G01'][0])
+    msg = create_measurement_msg(meas)
+    self.assertEqual(msg.ephemerisSource.type.raw, EphemerisSourceType.nasaUltraRapid)
+
+    # Test nav source type
+    ephem = GPSEphemeris(data_mock, gpstime)
+    meas = get_measurement_mock(gpstime, ephem)
+    msg = create_measurement_msg(meas)
+    self.assertEqual(msg.ephemerisSource.type.raw, EphemerisSourceType.nav)
 
   def test_laika_online(self):
     laikad = Laikad(auto_update=True, valid_ephem_types=EphemerisType.ULTRA_RAPID_ORBIT)
@@ -87,18 +115,10 @@ class TestLaikad(unittest.TestCase):
     self.assertEqual(256, len(correct_msgs))
     self.assertEqual(256, len([m for m in correct_msgs if m.gnssMeasurements.positionECEF.valid]))
 
-  def get_first_gps_time(self):
-    for m in self.logs:
-      if m.ubloxGnss.which == 'measurementReport':
-        new_meas = read_raw_ublox(m.ubloxGnss.measurementReport)
-        if len(new_meas) != 0:
-          return new_meas[0].recv_time
-
   def test_laika_get_orbits(self):
     laikad = Laikad(auto_update=False)
-    first_gps_time = self.get_first_gps_time()
     # Pretend process has loaded the orbits on startup by using the time of the first gps message.
-    laikad.fetch_orbits(first_gps_time, block=True)
+    laikad.fetch_orbits(self.first_gps_time, block=True)
     self.dict_has_values(laikad.astro_dog.orbits)
 
   @unittest.skip("Use to debug live data")
@@ -128,7 +148,6 @@ class TestLaikad(unittest.TestCase):
 
   def test_cache(self):
     laikad = Laikad(auto_update=True, save_ephemeris=True)
-    first_gps_time = self.get_first_gps_time()
 
     def wait_for_cache():
       max_time = 2
@@ -137,13 +156,14 @@ class TestLaikad(unittest.TestCase):
         max_time -= 0.1
         if max_time == 0:
           self.fail("Cache has not been written after 2 seconds")
+
     # Test cache with no ephemeris
     laikad.cache_ephemeris(t=GPSTime(0, 0))
     wait_for_cache()
     Params().delete(EPHEMERIS_CACHE)
 
-    laikad.astro_dog.get_navs(first_gps_time)
-    laikad.fetch_orbits(first_gps_time, block=True)
+    laikad.astro_dog.get_navs(self.first_gps_time)
+    laikad.fetch_orbits(self.first_gps_time, block=True)
 
     # Wait for cache to save
     wait_for_cache()
@@ -160,7 +180,7 @@ class TestLaikad(unittest.TestCase):
     with patch('selfdrive.locationd.laikad.get_orbit_data', return_value=None) as mock_method:
       # Verify no orbit downloads even if orbit fetch times is reset since the cache has recently been saved and we don't want to download high frequently
       laikad.astro_dog.orbit_fetched_times = TimeRangeHolder()
-      laikad.fetch_orbits(first_gps_time, block=False)
+      laikad.fetch_orbits(self.first_gps_time, block=False)
       mock_method.assert_not_called()
 
       # Verify cache is working for only orbits by running a segment
